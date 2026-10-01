@@ -1,0 +1,1525 @@
+import os
+import datetime
+import openpyxl
+
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    ReplyKeyboardMarkup,
+)
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+    filters,
+)
+
+# =========================================================
+# SOZLAMALAR
+# =========================================================
+
+TOKEN = "BU_YERGA_YANGI_BOT_TOKENINGIZNI_QOYING"
+
+EXCEL_FILE = r"C:\Users\user\Desktop\bot\baza.xlsx"
+
+STORE_SHEET = "Sheet1"
+EMPLOYEE_SHEET = "Xodimlar"
+REQUEST_SHEET = "Sorovlar"
+
+
+# =========================================================
+# EXCEL OCHISH
+# =========================================================
+
+def open_excel():
+
+    if not os.path.exists(EXCEL_FILE):
+        raise FileNotFoundError(
+            f"Excel fayl topilmadi: {EXCEL_FILE}"
+        )
+
+    return openpyxl.load_workbook(EXCEL_FILE)
+
+
+# =========================================================
+# MATNNI NORMALIZATSIYA
+# =========================================================
+
+def normalize(value):
+
+    if value is None:
+        return ""
+
+    text = str(value).strip().lower()
+
+    text = text.replace("’", "'")
+    text = text.replace("‘", "'")
+    text = text.replace("ʻ", "'")
+    text = text.replace("ʼ", "'")
+    text = text.replace("`", "'")
+
+    return text
+
+
+# =========================================================
+# XODIMNI ID ORQALI TOPISH
+#
+# Xodimlar:
+# A = Ismi
+# B = ID
+# C = ISHI
+# =========================================================
+
+def find_employee_by_id(employee_id):
+
+    wb = open_excel()
+
+    if EMPLOYEE_SHEET not in wb.sheetnames:
+        wb.close()
+        return None
+
+    ws = wb[EMPLOYEE_SHEET]
+
+    result = None
+
+    for row in ws.iter_rows(min_row=2, values_only=True):
+
+        name = row[0] if len(row) > 0 else None
+        excel_id = row[1] if len(row) > 1 else None
+        role = row[2] if len(row) > 2 else None
+
+        if excel_id is None:
+            continue
+
+        if str(excel_id).strip() == str(employee_id).strip():
+
+            result = {
+                "name": str(name or ""),
+                "id": str(excel_id),
+                "role": str(role or "")
+            }
+
+            break
+
+    wb.close()
+
+    return result
+
+
+# =========================================================
+# MANAGERLAR
+# =========================================================
+
+def get_managers():
+
+    wb = open_excel()
+
+    if EMPLOYEE_SHEET not in wb.sheetnames:
+        wb.close()
+        return []
+
+    ws = wb[EMPLOYEE_SHEET]
+
+    managers = []
+
+    for row in ws.iter_rows(min_row=2, values_only=True):
+
+        name = row[0] if len(row) > 0 else None
+        employee_id = row[1] if len(row) > 1 else None
+        role = row[2] if len(row) > 2 else None
+
+        if normalize(role) == "manager":
+
+            if employee_id:
+
+                managers.append({
+                    "name": str(name or ""),
+                    "id": str(employee_id)
+                })
+
+    wb.close()
+
+    return managers
+
+
+# =========================================================
+# OPERATORLAR
+# =========================================================
+
+def get_operators():
+
+    wb = open_excel()
+
+    if EMPLOYEE_SHEET not in wb.sheetnames:
+        wb.close()
+        return []
+
+    ws = wb[EMPLOYEE_SHEET]
+
+    operators = []
+
+    for row in ws.iter_rows(min_row=2, values_only=True):
+
+        name = row[0] if len(row) > 0 else None
+        employee_id = row[1] if len(row) > 1 else None
+        role = row[2] if len(row) > 2 else None
+
+        if normalize(role) == "operator":
+
+            if employee_id:
+
+                operators.append({
+                    "name": str(name or ""),
+                    "id": str(employee_id)
+                })
+
+    wb.close()
+
+    return operators
+
+
+# =========================================================
+# SOROVLAR SHEET YARATISH
+# =========================================================
+
+def create_request_sheet():
+
+    wb = open_excel()
+
+    if REQUEST_SHEET not in wb.sheetnames:
+
+        ws = wb.create_sheet(REQUEST_SHEET)
+
+        headers = [
+            "So'rov №",
+            "Sana",
+            "Yuboruvchi ID",
+            "Yuboruvchi",
+            "Do'kon kodi",
+            "Do'kon nomi",
+            "Eski DOSTAVKA",
+            "Yangi DOSTAVKA",
+            "Manager",
+            "Manager holati",
+            "Bekor qilish sababi",
+            "Operator",
+            "Operator holati",
+            "Umumiy holat"
+        ]
+
+        for col, header in enumerate(headers, 1):
+            ws.cell(row=1, column=col).value = header
+
+        wb.save(EXCEL_FILE)
+
+    wb.close()
+
+
+# =========================================================
+# YANGI SO'ROV RAQAMI
+# =========================================================
+
+def get_new_request_number():
+
+    wb = open_excel()
+
+    ws = wb[REQUEST_SHEET]
+
+    last_number = 0
+
+    for row in ws.iter_rows(min_row=2, values_only=True):
+
+        value = row[0]
+
+        if value is None:
+            continue
+
+        try:
+
+            number = int(value)
+
+            if number > last_number:
+                last_number = number
+
+        except:
+            pass
+
+    wb.close()
+
+    return last_number + 1
+
+
+# =========================================================
+# DO'KONNI TOPISH
+#
+# Sheet1:
+# A = kod
+# C = nomi
+# D = manzil
+# E = tuman
+# F = shahar
+# G = DOSTAVKA
+# =========================================================
+
+def find_store(store_code):
+
+    wb = open_excel()
+
+    if STORE_SHEET not in wb.sheetnames:
+        wb.close()
+        return None
+
+    ws = wb[STORE_SHEET]
+
+    search_code = str(store_code).strip()
+
+    result = None
+
+    for row in ws.iter_rows(min_row=2, values_only=True):
+
+        code = row[0] if len(row) > 0 else None
+
+        if code is None:
+            continue
+
+        if str(code).strip() == search_code:
+
+            result = {
+                "code": str(code),
+                "name": str(row[2] or "") if len(row) > 2 else "",
+                "address": str(row[3] or "") if len(row) > 3 else "",
+                "district": str(row[4] or "") if len(row) > 4 else "",
+                "city": str(row[5] or "") if len(row) > 5 else "",
+                "delivery": str(row[6] or "") if len(row) > 6 else ""
+            }
+
+            break
+
+    wb.close()
+
+    return result
+
+
+# =========================================================
+# SO'ROVNI SAQLASH
+# =========================================================
+
+def save_request(
+    request_number,
+    employee,
+    store,
+    new_delivery
+):
+
+    wb = open_excel()
+
+    ws = wb[REQUEST_SHEET]
+
+    now = datetime.datetime.now().strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+
+    ws.append([
+        request_number,
+        now,
+        employee["id"],
+        employee["name"],
+        store["code"],
+        store["name"],
+        store["delivery"],
+        new_delivery,
+        "",
+        "Kutilmoqda",
+        "",
+        "",
+        "",
+        "Manager tasdig'i kutilmoqda"
+    ])
+
+    wb.save(EXCEL_FILE)
+    wb.close()
+
+
+# =========================================================
+# SO'ROVNI TOPISH
+# =========================================================
+
+def find_request(request_number):
+
+    wb = open_excel()
+
+    ws = wb[REQUEST_SHEET]
+
+    result = None
+
+    for row in ws.iter_rows(min_row=2):
+
+        if str(row[0].value) == str(request_number):
+
+            result = {
+                "row": row[0].row,
+                "request_number": row[0].value,
+                "date": row[1].value,
+                "sender_id": row[2].value,
+                "sender": row[3].value,
+                "store_code": row[4].value,
+                "store_name": row[5].value,
+                "old_delivery": row[6].value,
+                "new_delivery": row[7].value,
+                "manager": row[8].value,
+                "manager_status": row[9].value,
+                "cancel_reason": row[10].value,
+                "operator": row[11].value,
+                "operator_status": row[12].value,
+                "overall_status": row[13].value
+            }
+
+            break
+
+    wb.close()
+
+    return result
+
+
+# =========================================================
+# SO'ROVNI YANGILASH
+# =========================================================
+
+def update_request(request_number, **kwargs):
+
+    wb = open_excel()
+
+    ws = wb[REQUEST_SHEET]
+
+    columns = {
+        "manager": 9,
+        "manager_status": 10,
+        "cancel_reason": 11,
+        "operator": 12,
+        "operator_status": 13,
+        "overall_status": 14
+    }
+
+    for row in ws.iter_rows(min_row=2):
+
+        if str(row[0].value) == str(request_number):
+
+            for key, value in kwargs.items():
+
+                if key in columns:
+
+                    ws.cell(
+                        row=row[0].row,
+                        column=columns[key]
+                    ).value = value
+
+            break
+
+    wb.save(EXCEL_FILE)
+    wb.close()
+
+
+# =========================================================
+# SHEET1 G USTUNINI YANGILASH
+# =========================================================
+
+def update_store_delivery(
+    store_code,
+    new_delivery
+):
+
+    wb = open_excel()
+
+    ws = wb[STORE_SHEET]
+
+    updated = False
+
+    for row in ws.iter_rows(min_row=2):
+
+        code = row[0].value
+
+        if code is None:
+            continue
+
+        if str(code).strip() == str(store_code).strip():
+
+            ws.cell(
+                row=row[0].row,
+                column=7
+            ).value = new_delivery
+
+            updated = True
+            break
+
+    if updated:
+        wb.save(EXCEL_FILE)
+
+    wb.close()
+
+    return updated
+
+
+# =========================================================
+# ASOSIY MENYU
+# =========================================================
+
+def main_menu(role):
+
+    role = normalize(role)
+
+    if role == "dostavka":
+
+        keyboard = [
+            ["🔎 Do‘kon qidirish"],
+            ["✏️ O‘zgartirish kiritish"],
+            ["📋 Mening so'rovlarim"],
+            ["👤 Mening ma'lumotlarim"]
+        ]
+
+    elif role == "manager":
+
+        keyboard = [
+            ["📋 Mening so'rovlarim"],
+            ["👤 Mening ma'lumotlarim"]
+        ]
+
+    elif role == "operator":
+
+        keyboard = [
+            ["📋 Mening so'rovlarim"],
+            ["👤 Mening ma'lumotlarim"]
+        ]
+
+    else:
+
+        keyboard = [
+            ["👤 Mening ma'lumotlarim"]
+        ]
+
+    return ReplyKeyboardMarkup(
+        keyboard,
+        resize_keyboard=True
+    )
+
+
+# =========================================================
+# START
+#
+# MUHIM:
+# /start bosilganda TELEGRAM ID emas,
+# XODIMNING EXCELDAGI IDsi so'raladi.
+# =========================================================
+
+async def start(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    context.user_data.clear()
+
+    await update.message.reply_text(
+        "Assalomu alaykum! 👋\n\n"
+        "🚚 DOSTAVKA botiga xush kelibsiz.\n\n"
+        "Iltimos, DOSTAVKA IDingizni kiriting:"
+    )
+
+    context.user_data[
+        "waiting_employee_id"
+    ] = True
+
+
+# =========================================================
+# ASOSIY MESSAGE HANDLER
+# =========================================================
+
+async def message_handler(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    text = update.message.text.strip()
+
+    print(
+        f"Telegramdan kelgan xabar: [{text}]"
+    )
+
+    # =====================================================
+    # 1. XODIM ID KIRITISH
+    # =====================================================
+
+    if context.user_data.get(
+        "waiting_employee_id"
+    ):
+
+        employee_id = text
+
+        employee = find_employee_by_id(
+            employee_id
+        )
+
+        if not employee:
+
+            await update.message.reply_text(
+                "❌ ID noto'g'ri yoki Xodimlar "
+                "bazasida topilmadi.\n\n"
+                "Iltimos, DOSTAVKA IDingizni "
+                "qaytadan kiriting:"
+            )
+
+            return
+
+        role = normalize(
+            employee["role"]
+        )
+
+        # Faqat DOSTAVKA
+       if role not in ("dostavka", "dastavka"):
+    await update.message.reply_text(
+        f"❌ Bu ID DOSTAVKA xodimiga "
+        f"tegishli emas.\n\n"
+        f"Topilgan xodim: "
+        f"{employee['name']}\n"
+        f"Lavozimi: "
+        f"{employee['role']}\n\n"
+        f"Iltimos, DOSTAVKA IDini "
+        f"kiriting:"
+    )
+
+            return
+
+        # ID to'g'ri
+        context.user_data[
+            "employee"
+        ] = employee
+
+        context.user_data[
+            "employee_id"
+        ] = employee["id"]
+
+        context.user_data[
+            "role"
+        ] = employee["role"]
+
+        context.user_data[
+            "waiting_employee_id"
+        ] = False
+
+        await update.message.reply_text(
+            f"✅ ID tasdiqlandi!\n\n"
+            f"👤 Ism: {employee['name']}\n"
+            f"🆔 ID: {employee['id']}\n"
+            f"🚚 Lavozim: {employee['role']}\n\n"
+            f"Quyidagi menyudan kerakli "
+            f"bo'limni tanlang:",
+            reply_markup=main_menu(
+                employee["role"]
+            )
+        )
+
+        return
+
+    # =====================================================
+    # XODIM LOGIN QILMAGAN BO'LSA
+    # =====================================================
+
+    employee = context.user_data.get(
+        "employee"
+    )
+
+    if not employee:
+
+        await update.message.reply_text(
+            "Avval /start ni bosing."
+        )
+
+        return
+
+    role = normalize(
+        employee["role"]
+    )
+
+    normalized_text = normalize(text)
+
+    # =====================================================
+    # MANAGER BEKOR QILISH SABABI
+    # =====================================================
+
+    if context.user_data.get(
+        "waiting_cancel_reason"
+    ):
+
+        request_number = context.user_data[
+            "waiting_cancel_reason"
+        ]
+
+        reason = text
+
+        request = find_request(
+            request_number
+        )
+
+        if not request:
+
+            await update.message.reply_text(
+                "❌ So'rov topilmadi."
+            )
+
+            context.user_data.pop(
+                "waiting_cancel_reason",
+                None
+            )
+
+            return
+
+        update_request(
+            request_number,
+            manager=employee["name"],
+            manager_status="Bekor qilindi",
+            cancel_reason=reason,
+            overall_status="Manager tomonidan bekor qilindi"
+        )
+
+        context.user_data.pop(
+            "waiting_cancel_reason",
+            None
+        )
+
+        await update.message.reply_text(
+            f"❌ So'rov №{request_number} "
+            f"bekor qilindi."
+        )
+
+        try:
+
+            await context.bot.send_message(
+                chat_id=int(request["sender_id"]),
+                text=(
+                    f"❌ So'rov №{request_number} "
+                    f"MANAGER tomonidan bekor qilindi.\n\n"
+                    f"Sabab:\n{reason}"
+                )
+            )
+
+        except Exception as e:
+
+            print(
+                f"Yuboruvchiga xabar xatosi: {e}"
+            )
+
+        return
+
+    # =====================================================
+    # OPERATOR BEKOR QILISH SABABI
+    # =====================================================
+
+    if context.user_data.get(
+        "waiting_operator_cancel_reason"
+    ):
+
+        request_number = context.user_data[
+            "waiting_operator_cancel_reason"
+        ]
+
+        reason = text
+
+        request = find_request(
+            request_number
+        )
+
+        if not request:
+
+            await update.message.reply_text(
+                "❌ So'rov topilmadi."
+            )
+
+            context.user_data.pop(
+                "waiting_operator_cancel_reason",
+                None
+            )
+
+            return
+
+        update_request(
+            request_number,
+            operator=employee["name"],
+            operator_status="Bekor qilindi",
+            cancel_reason=reason,
+            overall_status="Operator tomonidan bekor qilindi"
+        )
+
+        context.user_data.pop(
+            "waiting_operator_cancel_reason",
+            None
+        )
+
+        await update.message.reply_text(
+            f"❌ So'rov №{request_number} "
+            f"bekor qilindi."
+        )
+
+        try:
+
+            await context.bot.send_message(
+                chat_id=int(request["sender_id"]),
+                text=(
+                    f"❌ So'rov №{request_number} "
+                    f"OPERATOR tomonidan bekor qilindi.\n\n"
+                    f"Sabab:\n{reason}"
+                )
+            )
+
+        except Exception as e:
+
+            print(
+                f"Yuboruvchiga xabar xatosi: {e}"
+            )
+
+        return
+
+    # =====================================================
+    # DOSTAVKA KODINI KIRITISH
+    # =====================================================
+
+    if role == "dostavka":
+
+        if context.user_data.get(
+            "waiting_delivery_code"
+        ):
+
+            delivery_code = text
+
+            context.user_data[
+                "delivery_code"
+            ] = delivery_code
+
+            context.user_data[
+                "waiting_delivery_code"
+            ] = False
+
+            context.user_data[
+                "waiting_store_code"
+            ] = True
+
+            await update.message.reply_text(
+                f"✅ DOSTAVKA kodi qabul qilindi:\n\n"
+                f"🚚 {delivery_code}\n\n"
+                f"Endi do'kon kodini kiriting:"
+            )
+
+            return
+
+    # =====================================================
+    # DO'KON KODINI KIRITISH
+    # =====================================================
+
+    if role == "dostavka":
+
+        if context.user_data.get(
+            "waiting_store_code"
+        ):
+
+            store_code = text
+
+            store = find_store(
+                store_code
+            )
+
+            if not store:
+
+                await update.message.reply_text(
+                    f"❌ Do'kon topilmadi.\n\n"
+                    f"Kiritilgan kod:\n"
+                    f"{store_code}\n\n"
+                    f"Do'kon kodini qaytadan kiriting:"
+                )
+
+                return
+
+            new_delivery = context.user_data.get(
+                "delivery_code"
+            )
+
+            if not new_delivery:
+
+                await update.message.reply_text(
+                    "❌ DOSTAVKA kodi topilmadi.\n\n"
+                    "Qaytadan boshlash uchun "
+                    "/start ni bosing."
+                )
+
+                return
+
+            request_number = get_new_request_number()
+
+            save_request(
+                request_number,
+                employee,
+                store,
+                new_delivery
+            )
+
+            context.user_data.pop(
+                "delivery_code",
+                None
+            )
+
+            context.user_data.pop(
+                "waiting_store_code",
+                None
+            )
+
+            await update.message.reply_text(
+                f"✅ SO'ROV YARATILDI\n\n"
+                f"📋 So'rov №: {request_number}\n\n"
+                f"🏪 Do'kon: {store['name']}\n"
+                f"🔢 Kodi: {store['code']}\n"
+                f"📍 Manzil: {store['address']}\n\n"
+                f"🚚 Eski DOSTAVKA: "
+                f"{store['delivery']}\n"
+                f"➡️ Yangi DOSTAVKA: "
+                f"{new_delivery}\n\n"
+                f"⏳ MANAGER tasdig'i kutilmoqda."
+            )
+
+            await send_request_to_managers(
+                request_number,
+                context
+            )
+
+            return
+
+    # =====================================================
+    # O'ZGARTIRISH KIRITISH
+    # =====================================================
+
+    if "ozgartirish kiritish" in normalized_text:
+
+        if role != "dostavka":
+
+            await update.message.reply_text(
+                "❌ Bu bo'lim faqat DOSTAVKA uchun."
+            )
+
+            return
+
+        context.user_data[
+            "waiting_delivery_code"
+        ] = True
+
+        await update.message.reply_text(
+            "✏️ DOSTAVKA kodini kiriting:\n\n"
+            "Masalan:\n"
+            "12345"
+        )
+
+        return
+
+    # =====================================================
+    # DO'KON QIDIRISH
+    # =====================================================
+
+    if "do'kon qidirish" in normalized_text:
+
+        context.user_data[
+            "waiting_search_store"
+        ] = True
+
+        await update.message.reply_text(
+            "🔎 Do'kon kodini kiriting:"
+        )
+
+        return
+
+    # =====================================================
+    # DO'KON QIDIRISH NATIJASI
+    # =====================================================
+
+    if context.user_data.get(
+        "waiting_search_store"
+    ):
+
+        store = find_store(text)
+
+        if not store:
+
+            await update.message.reply_text(
+                "❌ Bunday do'kon topilmadi.\n\n"
+                "Do'kon kodini qaytadan kiriting:"
+            )
+
+            return
+
+        context.user_data.pop(
+            "waiting_search_store",
+            None
+        )
+
+        await update.message.reply_text(
+            f"🏪 DO'KON MA'LUMOTLARI\n\n"
+            f"🔢 Kodi: {store['code']}\n"
+            f"🏪 Nomi: {store['name']}\n"
+            f"📍 Manzil: {store['address']}\n"
+            f"📍 Tuman: {store['district']}\n"
+            f"🏙 Shahar: {store['city']}\n"
+            f"🚚 DOSTAVKA: {store['delivery']}"
+        )
+
+        return
+
+    # =====================================================
+    # MENING SO'ROVLARIM
+    # =====================================================
+
+    if "mening sorovlarim" in normalized_text:
+
+        await my_requests(
+            update,
+            context
+        )
+
+        return
+
+    # =====================================================
+    # MENING MA'LUMOTLARIM
+    # =====================================================
+
+    if "mening malumotlarim" in normalized_text:
+
+        await my_information(
+            update,
+            context
+        )
+
+        return
+
+    # =====================================================
+    # TUSHUNILMAGAN BUYRUQ
+    # =====================================================
+
+    await update.message.reply_text(
+        "❌ Men bu buyruqni tushunmadim.\n\n"
+        "Iltimos, menyudagi kerakli tugmani tanlang."
+    )
+
+
+# =========================================================
+# MANAGERLARGA SO'ROV YUBORISH
+# =========================================================
+
+async def send_request_to_managers(
+    request_number,
+    context
+):
+
+    request = find_request(
+        request_number
+    )
+
+    if not request:
+        return
+
+    managers = get_managers()
+
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                "✅ TASDIQLASH",
+                callback_data=f"approve:{request_number}"
+            ),
+            InlineKeyboardButton(
+                "❌ BEKOR QILISH",
+                callback_data=f"cancel:{request_number}"
+            )
+        ]
+    ]
+
+    reply_markup = InlineKeyboardMarkup(
+        keyboard
+    )
+
+    text = (
+        f"🔔 YANGI SO'ROV\n\n"
+        f"📋 So'rov №: {request['request_number']}\n"
+        f"👤 Yuboruvchi: {request['sender']}\n\n"
+        f"🏪 Do'kon: {request['store_name']}\n"
+        f"🔢 Kodi: {request['store_code']}\n\n"
+        f"🚚 Eski DOSTAVKA: "
+        f"{request['old_delivery']}\n"
+        f"➡️ Yangi DOSTAVKA: "
+        f"{request['new_delivery']}\n\n"
+        f"Tanlang:"
+    )
+
+    for manager in managers:
+
+        try:
+
+            await context.bot.send_message(
+                chat_id=int(manager["id"]),
+                text=text,
+                reply_markup=reply_markup
+            )
+
+        except Exception as e:
+
+            print(
+                f"Managerga yuborishda xato "
+                f"{manager['id']}: {e}"
+            )
+
+
+# =========================================================
+# OPERATORLARGA YUBORISH
+# =========================================================
+
+async def send_request_to_operators(
+    request_number,
+    context
+):
+
+    request = find_request(
+        request_number
+    )
+
+    if not request:
+        return
+
+    operators = get_operators()
+
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                "✅ BAJARILDI",
+                callback_data=f"done:{request_number}"
+            ),
+            InlineKeyboardButton(
+                "❌ BEKOR QILISH",
+                callback_data=f"opcancel:{request_number}"
+            )
+        ]
+    ]
+
+    reply_markup = InlineKeyboardMarkup(
+        keyboard
+    )
+
+    text = (
+        f"🔔 MANAGER TASDIQLAGAN SO'ROV\n\n"
+        f"📋 So'rov №: {request['request_number']}\n\n"
+        f"🏪 Do'kon: {request['store_name']}\n"
+        f"🔢 Kodi: {request['store_code']}\n\n"
+        f"🚚 Eski DOSTAVKA: "
+        f"{request['old_delivery']}\n"
+        f"➡️ Yangi DOSTAVKA: "
+        f"{request['new_delivery']}\n\n"
+        f"Topshiriqni bajargach "
+        f"«BAJARILDI» tugmasini bosing."
+    )
+
+    for operator in operators:
+
+        try:
+
+            await context.bot.send_message(
+                chat_id=int(operator["id"]),
+                text=text,
+                reply_markup=reply_markup
+            )
+
+        except Exception as e:
+
+            print(
+                f"Operatorga yuborishda xato "
+                f"{operator['id']}: {e}"
+            )
+
+
+# =========================================================
+# CALLBACK
+# =========================================================
+
+async def callback_handler(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    query = update.callback_query
+
+    await query.answer()
+
+    data = query.data
+
+    parts = data.split(":")
+
+    action = parts[0]
+    request_number = parts[1]
+
+    request = find_request(
+        request_number
+    )
+
+    if not request:
+
+        await query.edit_message_text(
+            "❌ So'rov topilmadi."
+        )
+
+        return
+
+    # -----------------------------------------------------
+    # MANAGERNI ID ORQALI TOPISH
+    # -----------------------------------------------------
+
+    employee = context.user_data.get(
+        "employee"
+    )
+
+    if not employee:
+
+        await query.answer(
+            "Avval /start orqali ID bilan kiring.",
+            show_alert=True
+        )
+
+        return
+
+    role = normalize(
+        employee["role"]
+    )
+
+    # -----------------------------------------------------
+    # TASDIQLASH
+    # -----------------------------------------------------
+
+    if action == "approve":
+
+        if role != "manager":
+
+            await query.answer(
+                "❌ Faqat MANAGER tasdiqlashi mumkin.",
+                show_alert=True
+            )
+
+            return
+
+        update_request(
+            request_number,
+            manager=employee["name"],
+            manager_status="Tasdiqlandi",
+            overall_status="Operatorga yuborildi"
+        )
+
+        await query.edit_message_text(
+            f"✅ So'rov №{request_number} "
+            f"tasdiqlandi.\n\n"
+            f"Operatorga yuborildi."
+        )
+
+        await send_request_to_operators(
+            request_number,
+            context
+        )
+
+        return
+
+    # -----------------------------------------------------
+    # MANAGER BEKOR QILISH
+    # -----------------------------------------------------
+
+    if action == "cancel":
+
+        if role != "manager":
+
+            await query.answer(
+                "❌ Faqat MANAGER bekor qilishi mumkin.",
+                show_alert=True
+            )
+
+            return
+
+        context.user_data[
+            "waiting_cancel_reason"
+        ] = request_number
+
+        await query.message.reply_text(
+            f"❌ So'rov №{request_number}\n\n"
+            f"Bekor qilish sababini yozing:"
+        )
+
+        return
+
+    # -----------------------------------------------------
+    # OPERATOR BAJARDI
+    # -----------------------------------------------------
+
+    if action == "done":
+
+        if role != "operator":
+
+            await query.answer(
+                "❌ Faqat OPERATOR bajarilgan "
+                "deb belgilashi mumkin.",
+                show_alert=True
+            )
+
+            return
+
+        success = update_store_delivery(
+            request["store_code"],
+            request["new_delivery"]
+        )
+
+        if not success:
+
+            await query.answer(
+                "❌ Excelda do'kon topilmadi.",
+                show_alert=True
+            )
+
+            return
+
+        update_request(
+            request_number,
+            operator=employee["name"],
+            operator_status="Bajarildi",
+            overall_status="Yakunlandi"
+        )
+
+        await query.edit_message_text(
+            f"✅ So'rov №{request_number} "
+            f"bajarildi.\n\n"
+            f"🏪 {request['store_name']}\n"
+            f"🚚 Yangi DOSTAVKA: "
+            f"{request['new_delivery']}\n\n"
+            f"Excel yangilandi."
+        )
+
+        try:
+
+            await context.bot.send_message(
+                chat_id=int(request["sender_id"]),
+                text=(
+                    f"✅ So'rov №{request_number} "
+                    f"yakunlandi.\n\n"
+                    f"🏪 Do'kon: {request['store_name']}\n"
+                    f"🚚 Yangi DOSTAVKA: "
+                    f"{request['new_delivery']}\n\n"
+                    f"Excel bazasi yangilandi."
+                )
+            )
+
+        except Exception as e:
+
+            print(
+                f"Yakuniy xabar xatosi: {e}"
+            )
+
+        return
+
+    # -----------------------------------------------------
+    # OPERATOR BEKOR QILISH
+    # -----------------------------------------------------
+
+    if action == "opcancel":
+
+        if role != "operator":
+
+            await query.answer(
+                "❌ Faqat OPERATOR bekor qilishi mumkin.",
+                show_alert=True
+            )
+
+            return
+
+        context.user_data[
+            "waiting_operator_cancel_reason"
+        ] = request_number
+
+        await query.message.reply_text(
+            f"❌ So'rov №{request_number}\n\n"
+            f"Bekor qilish sababini yozing:"
+        )
+
+        return
+
+
+# =========================================================
+# MENING SO'ROVLARIM
+# =========================================================
+
+async def my_requests(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    employee = context.user_data.get(
+        "employee"
+    )
+
+    if not employee:
+
+        await update.message.reply_text(
+            "Avval /start orqali kiring."
+        )
+
+        return
+
+    employee_id = employee["id"]
+
+    wb = open_excel()
+
+    ws = wb[REQUEST_SHEET]
+
+    found = []
+
+    for row in ws.iter_rows(min_row=2):
+
+        sender_id = row[2].value
+
+        if str(sender_id) == str(employee_id):
+
+            found.append({
+                "number": row[0].value,
+                "store": row[5].value,
+                "old": row[6].value,
+                "new": row[7].value,
+                "status": row[13].value
+            })
+
+    wb.close()
+
+    if not found:
+
+        await update.message.reply_text(
+            "📋 Sizda hozircha so'rovlar yo'q."
+        )
+
+        return
+
+    text = "📋 SIZNING SO'ROVLARINGIZ\n\n"
+
+    for item in found[-10:]:
+
+        text += (
+            f"№ {item['number']}\n"
+            f"🏪 {item['store']}\n"
+            f"🚚 {item['old']} → {item['new']}\n"
+            f"📌 {item['status']}\n\n"
+        )
+
+    await update.message.reply_text(
+        text
+    )
+
+
+# =========================================================
+# MENING MA'LUMOTLARIM
+# =========================================================
+
+async def my_information(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    employee = context.user_data.get(
+        "employee"
+    )
+
+    if not employee:
+
+        await update.message.reply_text(
+            "Avval /start orqali kiring."
+        )
+
+        return
+
+    await update.message.reply_text(
+        f"👤 MENING MA'LUMOTLARIM\n\n"
+        f"Ism: {employee['name']}\n"
+        f"ID: {employee['id']}\n"
+        f"Lavozim: {employee['role']}"
+    )
+
+
+# =========================================================
+# MAIN
+# =========================================================
+
+def main():
+
+    print("================================")
+    print("🤖 TELEGRAM BOT ISHGA TUSHMOQDA")
+    print("================================")
+
+    if not os.path.exists(EXCEL_FILE):
+
+        print(
+            f"❌ Excel fayl topilmadi:\n"
+            f"{EXCEL_FILE}"
+        )
+
+        return
+
+    try:
+
+        create_request_sheet()
+
+    except Exception as e:
+
+        print(
+            f"❌ Excelni ochishda xato: {e}"
+        )
+
+        return
+
+    if TOKEN == "BU_YERGA_YANGI_BOT_TOKENINGIZNI_QOYING":
+
+        print(
+            "❌ BOT TOKEN KIRITILMAGAN!"
+        )
+
+        return
+
+    application = (
+        Application.builder()
+        .token(TOKEN)
+        .build()
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "start",
+            start
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            callback_handler,
+            pattern=r"^(approve|cancel|done|opcancel):"
+        )
+    )
+
+    application.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            message_handler
+        )
+    )
+
+    print("✅ BOT ISHLAYAPTI.")
+    print("Telegramda /start yuboring.")
+    print("================================")
+
+    application.run_polling()
+
+
+# =========================================================
+# START
+# =========================================================
+
+if __name__ == "__main__":
+    main()
