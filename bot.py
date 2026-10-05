@@ -44,7 +44,7 @@ keep_alive()
 # SOZLAMALAR
 # ============================================================
 
-TOKEN = "8808158727:AAEq4xhbN3WylNc7IOKe3483OIG_QzVwzHk"
+TOKEN = os.getenv("BOT_TOKEN")
 
 BASE_DIR = Path(__file__).resolve().parent
 DB_FILE = BASE_DIR / "baza.db"
